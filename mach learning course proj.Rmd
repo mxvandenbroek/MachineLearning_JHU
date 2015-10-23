@@ -1,0 +1,127 @@
+---
+title: "Using sensor data to predict form of barbell lift"
+author: "Mark van den Broek"
+date: "Friday, October 23, 2015"
+output: html_document
+fontsize: 10pt
+---
+
+###Summary
+In this report it is described how we have developed a classification model that predicts from a set of sensor-measured features the way (5 possible classes) a classical barbell lift is performed. The model is a random forest model and we have estimated the out-of-sample accuracy to be above 99.5%. We have also identified the most important variables.  
+
+###Introduction
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. 
+
+In this analysis, we use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: http://groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset). 
+
+Class A corresponds to the specified execution of the exercise, while the other 4 classes correspond to common mistakes. 
+
+Read more: http://groupware.les.inf.puc-rio.br/har#weight_lifting_exercises#ixzz3pNTjfecG
+
+###Reading and preprocessing the data
+We start by downloading and reading the train and test data. We directly transform missing values or errors in the data, while reading.  
+```{r echo=FALSE, results="hide"}
+wdpath <- "C:/Users/MarkPetra/SkyDrive/Documents/Data science/JHU Data science specialization/Course Machine Learning/"
+setwd(file.path(wdpath))
+```
+```{r echo=FALSE, results="hide"}
+filename <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+#download.file(filename, destfile = "train.csv", method="curl")
+train <- read.csv("train.csv", stringsAsFactors = T, na.strings = c("NA","#DIV/0!"))
+filename <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+#download.file(filename, destfile = "test.csv")
+test <- read.csv("test.csv", stringsAsFactors = T, na.strings = c("NA","#DIV/0!"))
+```
+
+Inspection of the data learns that the train data have 19622 rows and 160 columns. Of these columns, there are 4 times 38 features corresponding to measurements of the sensors for belt, arm, dumbbell and fore arm. We will only consider these features. Although the test set contains the same persons/user names as the training set, we have chosen not to use user_name as a feature.
+
+Inspection of the test data shows that there are many columns that only have missing values. We decide to discard these columns also from the training set, since our main goal is predicting the test data. We are now left with 52 predictor variables. As good practice, we also randomize the order of the training set once. 
+```{r, echo=FALSE, results='hide'}
+library(caret)
+
+train <- train[,c(8:160)] #select only sensor features
+test <- test[,c(8:160)] #select only sensor features
+
+zerovars <- nearZeroVar(test)
+train <- train[, - zerovars]  #remove variables that have no impact
+test<- test[, - zerovars]
+
+set.seed(123)
+train <- train[sample( nrow(train)),] #randmize order of train data
+```
+
+###Exploratory analysis
+Let's do some exploratory analysis on the final data set to understand the data a bit better. We show two density plots of three related predictor variables. 
+```{r echo=FALSE, results='hide'}
+library(ggplot2)
+library(reshape2)
+library(gridExtra)
+```
+```{r echo=FALSE, fig.width= 8, fig.height=3}
+trainplot <- melt(train[,27:29])
+p1 <- ggplot(aes(x=value, colour=variable), data=trainplot) + geom_density()
+trainplot <- melt(train[,21:23])
+p2 <- ggplot(aes(x=value, colour=variable), data=trainplot) + geom_density()
+grid.arrange(p1, p2, nrow = 2)
+```
+
+###Training a random forest model
+We have chosen to try a random forest model first, due to the nature of the data set and the goal (classification). To measure the quality of our model, we will be looking at the accuracy measure. For random forest models, we do not per se need a cross-validation approach, since we can use the out-of-bag predictions from the trees. However, we have chosen to estimate the out-of-sample accuracy by using standard 5-fold cross-validation. We set the number of trees to 100. We stick with the other default settings of randomForest.  
+
+####Cross-validation
+```{r }
+library(randomForest)
+x <- train[, !colnames(train) %in% c("classe")]
+y <- train[, "classe"]
+
+set.seed(123)
+nfolds <- 5
+ntree <- 100
+folds <- caret::createFolds(y, k = nfolds)
+totalpred <- y[]
+for( k in 1:nfolds ){
+        f <- folds[[k]]
+        rf <- randomForest( x=x[-f,], y= y[-f], ntree = ntree, do.trace = FALSE )
+        pred <- predict(rf, x[f,])
+        totalpred[f] <- pred        
+}
+confMat <- caret::confusionMatrix(data = totalpred, reference = y)
+print(confMat$table)
+print(confMat$overall)
+```
+
+We see an accuracy estimate of `r confMat$overall[1]`, which is quite high. Also the confusion matrix shows that for all 5 classes we only make a few prediction errors. Out of 100 predictions, we make less than 1 mistake. We can potentially further improve the accuracy of our model by tweaking model parameters or developing multiple models and apply model averaging. But the current "simple"" model performs already quite well, so we stick with it. 
+
+####Training the model on full dataset
+We now run it once on the complete dataset: 
+```{r }
+rf <- randomForest( x=x, y=y, ntree = ntree, do.trace = FALSE, importance = T )
+rf
+```
+
+The OOB-estimate confirms the quality of the model. When we look at the plot of the error rate (1- accuracy) as a function of the number of trees, we conclude that 100 trees is more than sufficient: 
+```{r}
+plot(rf, main = "Prediction error as a function of the number of trees", cex.main = 0.8)
+```
+
+####Variable importance
+When using random forest, we can extract variable importance information that is obtained by looking at the average accuracy loss (over all trees) when permuting the variable of interest. We plot the 20 most important variables: 
+```{r}
+dotplot(sort(rf$importance[,"MeanDecreaseAccuracy"][1:20]), main= "20 most important variables", 
+        xlab = "Accuracy decrease")
+```
+
+###Predicting the test data
+We have used this model to predict the classes for the 20 training observations. It turned out that the model predicted all 20 observations correctly! 
+ 
+```{r, echo=FALSE, results='hide'}
+pml_write_files = function(x){
+  n = length(x)
+  for(i in 1:n){
+    filename = paste0("problem_id_",i,".txt")
+    write.table(x[i],file=filename,quote=FALSE,row.names=FALSE,col.names=FALSE)
+  }
+}
+answers <- as.character(predict(rf, test)) #they are ordered according to problem_id
+pml_write_files(answers)
+```
